@@ -1,0 +1,52 @@
+{
+  "name": "pi-cloudflare-codemode",
+  "version": "0.1.0",
+  "description": "Pi extension, skill, and Cloudflare Worker template for agent-authored Cloudflare operations.",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-skill",
+    "cloudflare",
+    "cloudflare-workers",
+    "codemode",
+    "agentic"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gwelinder/pi-cloudflare-codemode.git"
+  },
+  "homepage": "https://github.com/gwelinder/pi-cloudflare-codemode#readme",
+  "bugs": {
+    "url": "https://github.com/gwelinder/pi-cloudflare-codemode/issues"
+  },
+  "scripts": {
+    "bootstrap": "node scripts/bootstrap.mjs",
+    "check": "node scripts/check-repo.mjs",
+    "pack:dry": "npm pack --dry-run"
+  },
+  "files": [
+    "extensions",
+    "skills",
+    "templates",
+    "docs",
+    "scripts",
+    "AGENTS.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@sinclair/typebox": "*"
+  }
+}

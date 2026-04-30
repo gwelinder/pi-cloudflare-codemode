@@ -1,0 +1,22 @@
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: templates/cloudflare-codemode-worker/package-lock.json
+      - run: npm run check
+      - run: npm install
+        working-directory: templates/cloudflare-codemode-worker
+      - run: npm run typecheck
+        working-directory: templates/cloudflare-codemode-worker
+      - run: npm pack --dry-run

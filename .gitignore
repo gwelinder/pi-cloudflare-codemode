@@ -1,0 +1,29 @@
+node_modules/
+.DS_Store
+*.log
+*.tmp
+*.tsbuildinfo
+
+# Cloudflare/Wrangler local state
+.wrangler/
+.dev.vars
+.dev.vars.*
+wrangler.local.jsonc
+
+# Pi local state and secrets
+.pi/
+cloudflare-codemode.json
+auth.json
+settings.json
+*.jsonl
+
+# Secrets/env
+.env
+.env.*
+*.token
+*.secret
+
+# Package artifacts
+*.tgz
+coverage/
+dist/
