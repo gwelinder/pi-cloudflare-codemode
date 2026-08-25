@@ -17,6 +17,8 @@ jobs:
       - run: npm run check
       - run: npm install
         working-directory: templates/cloudflare-codemode-worker
+      - run: npm test
+        working-directory: templates/cloudflare-codemode-worker
       - run: npm run typecheck
         working-directory: templates/cloudflare-codemode-worker
       - run: npm pack --dry-run

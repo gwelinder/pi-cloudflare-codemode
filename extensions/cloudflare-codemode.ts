@@ -193,6 +193,7 @@ function makeHeaders(config: ResolvedConfig): Record<string, string> {
 interface SchemaMethodDescriptor {
 	name: string;
 	description?: string;
+	endpoint?: string;
 	inputSchema?: Record<string, unknown>;
 	required?: string[];
 	mutating?: boolean;
@@ -358,6 +359,7 @@ function normalizeSchemaMethod(method: SchemaMethodDescriptor): SchemaMethodDesc
 	return {
 		name: method.name,
 		description: method.description,
+		endpoint: method.endpoint,
 		inputSchema: method.inputSchema ?? { type: "object", properties: {} },
 		required: Array.isArray(method.required) ? method.required.filter((value): value is string => typeof value === "string") : [],
 		mutating: Boolean(method.mutating),
@@ -907,6 +909,7 @@ export default function cloudflareCodemodeExtension(pi: ExtensionAPI) {
 					return {
 						name: method.name,
 						description: method.description,
+						endpoint: method.endpoint,
 						product: method.product,
 						mutating: Boolean(method.mutating),
 						required,
@@ -921,6 +924,7 @@ export default function cloudflareCodemodeExtension(pi: ExtensionAPI) {
 					name: method.name,
 					score,
 					description: method.description,
+					endpoint: method.endpoint,
 					product: method.product,
 					mutating: Boolean(method.mutating),
 				}));
