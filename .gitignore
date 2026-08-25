@@ -8,6 +8,7 @@ node_modules/
 .wrangler/
 .dev.vars
 .dev.vars.*
+!/templates/cloudflare-codemode-worker/.dev.vars.example
 wrangler.local.jsonc
 
 # Pi local state and secrets

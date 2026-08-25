@@ -1,0 +1,3 @@
+CODEMODE_SHARED_TOKEN=replace-with-a-random-shared-token
+CLOUDFLARE_API_TOKEN=replace-with-a-cloudflare-api-token
+CLOUDFLARE_ACCOUNT_ID=optional-cloudflare-account-id
