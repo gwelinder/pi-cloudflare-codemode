@@ -65,6 +65,102 @@ function toErrorMessage(error: unknown): string {
 	return JSON.stringify(error);
 }
 
+const SENSITIVE_DIAGNOSTIC_KEY = /(?:authorization|cookie|token|secret|password|credential|private[_-]?key|api[_-]?key)/i;
+
+function redactDiagnosticString(value: string): string {
+	return value
+		.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
+		.replace(/((?:token|secret|password|api[_-]?key)\s*[:=]\s*)[^\s,;]+/gi, "$1[REDACTED]");
+}
+
+function redactDiagnosticValue(value: unknown, seen = new WeakSet<object>()): unknown {
+	if (typeof value === "string") return redactDiagnosticString(value);
+	if (!value || typeof value !== "object") return value;
+	if (seen.has(value)) return "[Circular]";
+	seen.add(value);
+	if (Array.isArray(value)) return value.map((item) => redactDiagnosticValue(item, seen));
+	return Object.fromEntries(
+		Object.entries(value).map(([key, item]) => [
+			key,
+			SENSITIVE_DIAGNOSTIC_KEY.test(key) ? "[REDACTED]" : redactDiagnosticValue(item, seen),
+		]),
+	);
+}
+
+function errorField(error: unknown, field: string): unknown {
+	return error && typeof error === "object" ? (error as Record<string, unknown>)[field] : undefined;
+}
+
+function extractCloudflareErrors(error: unknown): unknown[] | undefined {
+	const directErrors = errorField(error, "errors");
+	if (Array.isArray(directErrors)) return directErrors;
+	const body = errorField(error, "responseBody") ?? errorField(error, "body") ?? errorField(error, "error");
+	if (!body || typeof body !== "object") return undefined;
+	const bodyErrors = (body as Record<string, unknown>).errors;
+	if (Array.isArray(bodyErrors)) return bodyErrors;
+	return [body];
+}
+
+function extractCloudflareCode(error: unknown, errors: unknown[] | undefined): string | number | undefined {
+	const directCode = errorField(error, "code");
+	if (typeof directCode === "string" || typeof directCode === "number") return directCode;
+	const firstCode = errorField(errors?.[0], "code");
+	return typeof firstCode === "string" || typeof firstCode === "number" ? firstCode : undefined;
+}
+
+export interface NormalizedToolError {
+	message: string;
+	method: string;
+	endpoint?: string;
+	httpStatus?: number;
+	cloudflareCode?: string | number;
+	cloudflareErrors?: unknown[];
+	permissionDiagnostic?: {
+		scope: "zone";
+		requiredPermission: "Zone Workers Routes/Edit";
+		detail: string;
+	};
+}
+
+function isZoneWorkersRoutesEndpoint(endpoint: string | undefined): boolean {
+	return Boolean(endpoint && /^\w+ \/zones\/\{zone_id\}\/workers\/routes(?:\/|$)/.test(endpoint));
+}
+
+export function normalizeToolError(error: unknown, method: string, endpoint?: string): NormalizedToolError {
+	const statusValue = errorField(error, "status") ?? errorField(error, "statusCode");
+	const httpStatus = typeof statusValue === "number" ? statusValue : undefined;
+	const cloudflareErrors = extractCloudflareErrors(error);
+	const cloudflareCode = extractCloudflareCode(error, cloudflareErrors);
+	const permissionDenied = httpStatus === 401 || httpStatus === 403 || String(cloudflareCode) === "10000";
+	const originalMessage = redactDiagnosticString(toErrorMessage(error));
+
+	if (permissionDenied && isZoneWorkersRoutesEndpoint(endpoint)) {
+		const detail = "This zone-scoped Workers Routes endpoint requires Zone Workers Routes/Edit for the target zone. Account-scoped Worker permissions, including Account Workers Scripts/Edit or Account Workers Routes/Edit, do not authorize this zone endpoint.";
+		return {
+			message: `Cloudflare denied ${method} at ${endpoint}. ${detail}`,
+			method,
+			endpoint,
+			httpStatus,
+			cloudflareCode,
+			cloudflareErrors: cloudflareErrors ? redactDiagnosticValue(cloudflareErrors) as unknown[] : undefined,
+			permissionDiagnostic: {
+				scope: "zone",
+				requiredPermission: "Zone Workers Routes/Edit",
+				detail,
+			},
+		};
+	}
+
+	return {
+		message: originalMessage,
+		method,
+		endpoint,
+		httpStatus,
+		cloudflareCode,
+		cloudflareErrors: cloudflareErrors ? redactDiagnosticValue(cloudflareErrors) as unknown[] : undefined,
+	};
+}
+
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
 	let binary = "";
 	const bytes = new Uint8Array(buffer);
@@ -529,6 +625,7 @@ function buildAccessIdentityProviderPayload(args: any): Record<string, unknown> 
 
 interface ToolDescriptor {
 	description: string;
+	endpoint?: string;
 	inputSchema: Record<string, unknown>;
 	execute: (...args: unknown[]) => Promise<unknown>;
 }
@@ -540,11 +637,12 @@ interface SchemaMethodDescriptor {
 	required: string[];
 	mutating: boolean;
 	product: string;
+	endpoint?: string;
 	aliases: string[];
 	keywords: string[];
 }
 
-function buildTools(runtime: CloudflareRuntime, mode: string): Record<string, ToolDescriptor> {
+export function buildTools(runtime: CloudflareRuntime, mode: string): Record<string, ToolDescriptor> {
 	const requireApply = (op: string) => {
 		if (mode !== "apply") throw new Error(`${op} requires mode=apply.`);
 	};
@@ -1373,6 +1471,7 @@ function buildTools(runtime: CloudflareRuntime, mode: string): Record<string, To
 
 		cf_worker_routes_list: {
 			description: "List Worker routes for a zone.",
+			endpoint: "GET /zones/{zone_id}/workers/routes",
 			inputSchema: {
 				type: "object",
 				properties: { zoneId: { type: "string" }, maxItems: { type: "number" } },
@@ -1389,6 +1488,7 @@ function buildTools(runtime: CloudflareRuntime, mode: string): Record<string, To
 
 		cf_worker_route_get: {
 			description: "Get a specific Worker route by ID.",
+			endpoint: "GET /zones/{zone_id}/workers/routes/{route_id}",
 			inputSchema: {
 				type: "object",
 				properties: { zoneId: { type: "string" }, routeId: { type: "string" } },
@@ -1402,6 +1502,7 @@ function buildTools(runtime: CloudflareRuntime, mode: string): Record<string, To
 
 		cf_worker_route_create: {
 			description: "Create a Worker route for a zone. Mutating — requires mode=apply.",
+			endpoint: "POST /zones/{zone_id}/workers/routes",
 			inputSchema: {
 				type: "object",
 				properties: {
@@ -1424,6 +1525,7 @@ function buildTools(runtime: CloudflareRuntime, mode: string): Record<string, To
 
 		cf_worker_route_update: {
 			description: "Update a Worker route. Mutating — requires mode=apply.",
+			endpoint: "PUT /zones/{zone_id}/workers/routes/{route_id}",
 			inputSchema: {
 				type: "object",
 				properties: {
@@ -1447,6 +1549,7 @@ function buildTools(runtime: CloudflareRuntime, mode: string): Record<string, To
 
 		cf_worker_route_delete: {
 			description: "Delete a Worker route. Mutating — requires mode=apply.",
+			endpoint: "DELETE /zones/{zone_id}/workers/routes/{route_id}",
 			inputSchema: {
 				type: "object",
 				properties: { zoneId: { type: "string" }, routeId: { type: "string" } },
@@ -4500,7 +4603,7 @@ function inferMutating(toolName: string, description: string): boolean {
 	return /_(create|update|delete|put|edit|append|replace|restore|publish|purge)\b/i.test(toolName);
 }
 
-function buildSchemaMethods(tools: Record<string, ToolDescriptor>): SchemaMethodDescriptor[] {
+export function buildSchemaMethods(tools: Record<string, ToolDescriptor>): SchemaMethodDescriptor[] {
 	const methods: SchemaMethodDescriptor[] = [];
 	for (const [name, tool] of Object.entries(tools)) {
 		const { product, aliases } = inferProductDetails(name);
@@ -4520,6 +4623,7 @@ function buildSchemaMethods(tools: Record<string, ToolDescriptor>): SchemaMethod
 			required,
 			mutating: inferMutating(name, tool.description),
 			product,
+			endpoint: tool.endpoint,
 			aliases,
 			keywords,
 		});
@@ -4557,8 +4661,13 @@ function generateSchema(tools: Record<string, ToolDescriptor>): string {
 // Execution
 // ---------------------------------------------------------------------------
 
-function buildToolFunctions(
+export interface ExecutionDiagnostics {
+	error?: NormalizedToolError;
+}
+
+export function buildToolFunctions(
 	tools: Record<string, ToolDescriptor>,
+	diagnostics?: ExecutionDiagnostics,
 ): Record<string, (...args: unknown[]) => Promise<unknown>> {
 	const fns: Record<string, (...args: unknown[]) => Promise<unknown>> = {};
 	for (const [name, tool] of Object.entries(tools)) {
@@ -4566,7 +4675,13 @@ function buildToolFunctions(
 			// Codemode sandbox calls: codemode.toolName(inputObject)
 			// The first argument is the input object.
 			const input = args[0] ?? {};
-			return tool.execute(input);
+			try {
+				return await tool.execute(input);
+			} catch (error) {
+				const normalized = normalizeToolError(error, name, tool.endpoint);
+				if (diagnostics) diagnostics.error = normalized;
+				throw new Error(normalized.message);
+			}
 		};
 	}
 	return fns;
@@ -4637,7 +4752,8 @@ export default {
 			try {
 				const runtime = new CloudflareRuntime(env);
 				const tools = buildTools(runtime, mode);
-				const fns = buildToolFunctions(tools);
+				const diagnostics: ExecutionDiagnostics = {};
+				const fns = buildToolFunctions(tools, diagnostics);
 				const executor = new DynamicWorkerExecutor({ loader: env.LOADER as never });
 				const result = await executor.execute(code, fns);
 				const durationMs = Date.now() - startedAt;
@@ -4646,7 +4762,7 @@ export default {
 					runId,
 					status: result.error ? "error" : "ok",
 					result: result.result,
-					error: result.error,
+					error: result.error ? diagnostics.error ?? { message: redactDiagnosticString(toErrorMessage(result.error)) } : undefined,
 					logs: result.logs ?? [],
 					durationMs,
 				});
